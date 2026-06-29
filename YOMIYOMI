@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>QR棚卸しカウンター</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <style>
+    body { background-color: #f5f5f5; user-select: none; }
+    .app-container { max-width: 500px; margin: 0 auto; padding: 10px; }
+    .screen { display: none; }
+    .screen.active { display: block; }
+    #canvas { width: 100%; border-radius: 8px; background: #000; }
+    .camera-wrapper { position: relative; width: 100%; overflow: hidden; border-radius: 8px; margin-bottom: 15px; }
+    .flash-overlay { position: absolute; top:0; left:0; width:100%; height:100%; background-color: rgba(76, 175, 80, 0.7); opacity: 0; pointer-events: none; transition: opacity 0.1s ease; z-index: 10; }
+    .flash-active { opacity: 1; }
+    .info-card { padding: 15px !important; margin-top: 10px; }
+    .qty-display { font-size: 3.5rem; font-weight: bold; text-align: center; margin: 10px 0; color: #1565c0; }
+    .undo-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #323232; color: #fff; padding: 12px 24px; border-radius: 4px; display: flex; align-items: center; justify-content: space-between; min-width: 280px; z-index: 999; box-shadow: 0 3px 5px -1px rgba(0,0,0,.2); display: none; }
+    .undo-btn { color: #ffeb3b; background: none; border: none; cursor: pointer; display: flex; align-items: center; font-weight: bold; }
+    .loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.7); z-index: 998; justify-content: center; align-items: center; }
+  </style>
+</head>
+<body>
+
+<!-- 通信中ローディング表示 -->
+<div id="loading" class="loading-overlay">
+  <div class="preloader-wrapper active">
+    <div class="spinner-layer spinner-blue-only"><div class="circle-clipper left"><div class="circle"></div></div><div class="gap-patch"><div class="circle"></div></div><div class="circle-clipper right"><div class="circle"></div></div></div>
+  </div>
+</div>
+
+<div class="app-container">
+  
+  <!-- 1. トップ画面 -->
+  <div id="screen-top" class="screen active center-align" style="margin-top: 50px;">
+    <h4>QR棚卸しカウンター</h4>
+    <p class="grey-text">設計コンセプト「QRを読む、数量を登録する。それだけ。」</p>
+    <div style="margin-top: 40px;">
+      <button class="btn-large waves-effect waves-light blue darken-2" onclick="startApp('count')" style="width:80%; margin-bottom:20px;">
+        <i class="material-icons left">layers</i>📦 連続カウント
+      </button>
+      <button class="btn-large waves-effect waves-light green darken-2" onclick="startApp('input')" style="width:80%; margin-bottom:20px;">
+        <i class="material-icons left">edit</i>🔢 数量入力
+      </button>
+      <p><button class="btn flat waves-effect" onclick="toggleScreen('screen-settings')"><i class="material-icons left">settings</i>設定</button></p>
+    </div>
+  </div>
+
+  <!-- 2. 作業画面 -->
+  <div id="screen-work" class="screen">
+    <div class="row" style="margin-bottom: 5px;">
+      <div class="col s6"><b id="mode-title">モード</b></div>
+      <div class="col s6 right-align"><button class="btn-small flat" onclick="stopApp()"><i class="material-icons left">arrow_back</i>戻る</button></div>
+    </div>
+
+    <div class="camera-wrapper">
+      <div id="flash" class="flash-overlay"></div>
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div class="card info-card">
+      <div id="placeholder-text" class="center-align grey-text" style="padding: 20px 0;">QRコードをかざしてください</div>
+      <div id="item-info" style="display: none;">
+        <div class="row" style="margin-bottom:0;">
+          <div class="col s8">
+            <span class="grey-text text-darken-1" style="font-size: 0.8rem;">保管品コード</span>
+            <h6 id="display-code" style="margin:0 0 8px 0; font-weight: bold;">-</h6>
+            <span class="grey-text text-darken-1" style="font-size: 0.8rem;">製品名 / 型番</span>
+            <h6 id="display-name" style="margin:0; font-weight: 500;">-</h6>
+          </div>
+          <div class="col s4 right-align">
+            <span class="chip blue white-text" id="display-shelf">-</span>
+          </div>
+        </div>
+        
+        <div id="qty-zone">
+          <div class="qty-display" id="display-qty">0</div>
+          
+          <div id="input-actions" class="center-align" style="display: none;">
+            <button class="btn-floating btn-large waves-effect waves-light red" onclick="changeQty(-1)"><i class="material-icons">remove</i></button>
+            <button class="btn-floating btn-large waves-effect waves-light blue" onclick="changeQty(5)" style="margin: 0 15px;"><i class="material-icons">exposure_plus_5</i></button>
+            <button class="btn-floating btn-large waves-effect waves-light green" onclick="changeQty(1)"><i class="material-icons">add</i></button>
+            <div style="margin-top: 20px;">
+              <button class="btn-large waves-effect waves-light blue darken-3" style="width: 100%" onclick="submitInputMode()"><i class="material-icons left">save</i>保存</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. 設定画面 -->
+  <div id="screen-settings" class="screen">
+    <h5>アプリ設定</h5>
+    <div class="card-panel">
+      <p><label><input type="checkbox" id="set-sound" checked /><span>🔊 読取音 (ピッ♪)</span></label></p>
+      <p><label><input type="checkbox" id="set-vibrate" checked /><span>📳 バイブレーション</span></label></p>
+      <p><label><input type="checkbox" id="set-showqty" checked /><span>🔢 カウント中の数量表示</span></label></p>
+    </div>
+    <button class="btn blue block" style="width:100%" onclick="toggleScreen('screen-top')">設定を保存して戻る</button>
+  </div>
+
+  <!-- Undoトースト -->
+  <div id="undo-toast" class="undo-toast">
+    <span>✔ 保存しました</span>
+    <button class="undo-btn" onclick="triggerUndo()"><i class="material-icons left">undo</i>取り消す</button>
+  </div>
+
+</div>
+
+<script>
+  // 🔴 ここに発行したGASのウェブアプリURLを貼り付けてください
+  const GAS_API_URL = "https://script.google.com/macros/s/AKfycbwPyH3WKQutHmfN2ndfWGtyNB14z-HTeWwgWv5cg11fZhuCtOaqAKnjmnqcQws42XhM/exec
+";
+
+  let currentMode = 'count';
+  let video = document.createElement("video");
+  let canvasElement = document.getElementById("canvas");
+  let canvas = canvasElement.getContext("2d");
+  let animationFrameId = null;
+  let currentItem = null;
+  let currentQty = 0;
+  let isLocked = false;
+  let lastScannedQR = null;
+  let undoTimeoutToken = null;
+  let lastSavedRows = null;
+
+  const getSetting = (id) => document.getElementById(id).checked;
+
+  function toggleScreen(screenId) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(screenId).classList.add('active');
+  }
+
+  function showLoading(show) {
+    document.getElementById('loading').style.display = show ? 'flex' : 'none';
+  }
+
+  function startApp(mode) {
+    currentMode = mode;
+    document.getElementById('mode-title').innerText = mode === 'count' ? '📦 連続カウントモード' : '🔢 数量入力モード';
+    document.getElementById('input-actions').style.display = mode === 'input' ? 'block' : 'none';
+    resetUI();
+    toggleScreen('screen-work');
+    initCamera();
+  }
+
+  function stopApp() {
+    if (video.srcObject) {
+      video.srcObject.getTracks().forEach(track => track.stop());
+    }
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    toggleScreen('screen-top');
+  }
+
+  function resetUI() {
+    currentItem = null;
+    currentQty = 0;
+    lastScannedQR = null;
+    isLocked = false;
+    document.getElementById('placeholder-text').style.display = 'block';
+    document.getElementById('item-info').style.display = 'none';
+  }
+
+  // 独立したドメインなので、iOSでも以下のシンプルな記述で一発起動します
+  function initCamera() {
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then(function(stream) {
+      video.srcObject = stream;
+      video.setAttribute("playsinline", true);
+      video.play();
+      animationFrameId = requestAnimationFrame(tick);
+    }).catch(err => {
+      alert("カメラの起動に失敗しました。ブラウザの設定でカメラを許可してください。");
+    });
+  }
+
+  function tick() {
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      canvasElement.height = video.videoHeight;
+      canvasElement.width = video.videoWidth;
+      canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+      
+      var imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+      var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+      
+      if (code) {
+        if (code.data !== lastScannedQR) {
+          isLocked = false;
+        }
+        if (!isLocked) {
+          processQR(code.data);
+        }
+      } else {
+        lastScannedQR = null;
+        if (currentMode === 'count') isLocked = false;
+      }
+    }
+    animationFrameId = requestAnimationFrame(tick);
+  }
+
+  // GASへの共通通信関数（Fetch APIを利用）
+  async function callGAS(payload) {
+    try {
+      const response = await fetch(GAS_API_URL, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      return await response.json();
+    } catch (e) {
+      console.error(e);
+      alert("通信エラーが発生しました。ネット接続を確認してください。");
+      return null;
+    }
+  }
+
+  async function processQR(qrText) {
+    isLocked = true;
+    lastScannedQR = qrText;
+    
+    triggerSuccessFeedback();
+    showLoading(true);
+
+    const item = await callGAS({ action: 'getItem', qrText: qrText });
+    showLoading(false);
+
+    if (!item || item.error) {
+      alert("未登録またはエラー: " + (item ? item.error : qrText));
+      isLocked = false;
+      return;
+    }
+    
+    currentItem = item;
+    document.getElementById('placeholder-text').style.display = 'none';
+    document.getElementById('item-info').style.display = 'block';
+    document.getElementById('display-code').innerText = item.code;
+    document.getElementById('display-name').innerText = `${item.name} (${item.model})`;
+    document.getElementById('display-shelf').innerText = item.shelf;
+
+    if (currentMode === 'count') {
+      currentQty = 1; 
+      document.getElementById('display-qty').innerText = getSetting('set-showqty') ? currentQty : '●';
+      executeSave(1, '連続カウント');
+      setTimeout(() => { if(lastScannedQR === qrText) isLocked = false; }, 1500);
+    } else {
+      currentQty = 0;
+      document.getElementById('display-qty').innerText = currentQty;
+    }
+  }
+
+  function changeQty(amount) {
+    currentQty = Math.max(0, currentQty + amount);
+    document.getElementById('display-qty').innerText = currentQty;
+  }
+
+  function submitInputMode() {
+    if (!currentItem) return;
+    executeSave(currentQty, '数量入力');
+    resetUI();
+  }
+
+  async function executeSave(qty, mode) {
+    showLoading(true);
+    const resultRows = await callGAS({
+      action: 'save',
+      user: "現場作業員A",
+      itemCode: currentItem.code,
+      quantity: qty,
+      mode: mode
+    });
+    showLoading(false);
+
+    if (resultRows) {
+      lastSavedRows = resultRows;
+      showUndoToast();
+    }
+  }
+
+  function triggerSuccessFeedback() {
+    const flash = document.getElementById('flash');
+    flash.classList.add('flash-active');
+    setTimeout(() => flash.classList.remove('flash-active'), 300);
+
+    if (getSetting('set-sound')) {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(2000, ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.08);
+      } catch(e) {}
+    }
+
+    if (getSetting('set-vibrate') && navigator.vibrate) {
+      navigator.vibrate(100);
+    }
+  }
+
+  function showUndoToast() {
+    const toast = document.getElementById('undo-toast');
+    toast.style.display = 'flex';
+    if (undoTimeoutToken) clearTimeout(undoTimeoutToken);
+    undoTimeoutToken = setTimeout(() => {
+      toast.style.display = 'none';
+      lastSavedRows = null;
+    }, 5000);
+  }
+
+  async function triggerUndo() {
+    if (!lastSavedRows) return;
+    document.getElementById('undo-toast').style.display = 'none';
+    
+    showLoading(true);
+    const res = await callGAS({ action: 'undo', rows: lastSavedRows });
+    showLoading(false);
+
+    if (res && res.success) {
+      M.toast({html: '↩️ 登録を取り消しました', displayLength: 2000});
+      if (currentMode === 'count') document.getElementById('display-qty').innerText = 0;
+    }
+    lastSavedRows = null;
+    if (undoTimeoutToken) clearTimeout(undoTimeoutToken);
+  }
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+</body>
+</html>
