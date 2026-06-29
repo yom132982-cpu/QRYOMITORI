@@ -215,14 +215,25 @@
     }
   }
 
-  async function processQR(qrText) {
-    isLocked = true;
-    lastScannedQR = qrText;
-    
-    triggerSuccessFeedback();
-    showLoading(true);
+async function processQR(qrText) {
+  isLocked = true;
+  lastScannedQR = qrText;
+  
+  // 💡 【ここを追加】前後の余計な文字を削って、真ん中のコード（AH... や BL...）だけを抽出
+  // 例: "78AH1TT900      812H"  ->  "AH1TT900"
+  let cleanedQR = qrText;
+  const match = qrText.match(/(AH|BL)[A-Z0-9]+/i);
+  if (match) {
+    cleanedQR = match[0]; // 見つかったコード部分（AH1TT900 など）だけを代入
+  }
+  
+  triggerSuccessFeedback();
+  showLoading(true);
 
-    const item = await callGAS({ action: 'getItem', qrText: qrText });
+  // 💡 削った後のきれいなコード（cleanedQR）をGASに送る
+  const item = await callGAS({ action: 'getItem', qrText: cleanedQR });
+  
+ 
     showLoading(false);
 
     if (!item || item.error) {
